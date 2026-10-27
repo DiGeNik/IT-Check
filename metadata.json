@@ -1,0 +1,8 @@
+{
+  "name": "AutoGrade IT - Проверка на работни листи",
+  "description": "Учителско уеб приложение за автоматична групова проверка на предадени работни листи по Информационни технологии с рубрика и експорт за Google Classroom.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
