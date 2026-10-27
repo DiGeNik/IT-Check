@@ -15,6 +15,7 @@ import { AssignmentSettingsModal, DEFAULT_PRESETS } from './components/Assignmen
 import { StudentSubmission, AssignmentSettings } from './types';
 import { SAMPLE_WORKSHEETS } from './data/sampleWorksheets';
 import { exportToCSV } from './utils/exportUtils';
+import { analyzeWorksheetDirectly } from './services/geminiService';
 
 export default function App() {
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
@@ -122,49 +123,14 @@ export default function App() {
 
     let lastError: Error | null = null;
 
-    // Retry up to 2 times for transient dev server reload or network glitches
+    // Retry up to 2 times for transient network glitches
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         if (attempt > 0) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
         }
 
-        const res = await fetch('/api/analyze-worksheet', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-
-        const rawText = await res.text();
-        const isHtml =
-          rawText.trim().startsWith('<') ||
-          rawText.includes('<!doctype') ||
-          rawText.includes('<!DOCTYPE') ||
-          rawText.includes('<html');
-
-        if (isHtml) {
-          throw new Error('Сървърът временно върна HTML страница (възможно е сървърът да се е рестартирал).');
-        }
-
-        let json: any = null;
-        try {
-          json = JSON.parse(rawText);
-        } catch {
-          throw new Error('Невалиден формат на отговора от сървъра.');
-        }
-
-        if (!res.ok) {
-          throw new Error(json?.error || `Грешка при проверка (HTTP ${res.status}).`);
-        }
-
-        if (!json || !json.data) {
-          throw new Error(json?.error || 'Липсват данни от резултата от проверката.');
-        }
-
-        const analysis = json.data;
+        const analysis = await analyzeWorksheetDirectly(payload);
         const tasks = Array.isArray(analysis.tasks) ? analysis.tasks : [];
 
         return {
