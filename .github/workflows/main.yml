@@ -24,10 +24,12 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.x
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          npm cache clean --force
+          npm install --force
 
       - name: Build
         run: npm run build
