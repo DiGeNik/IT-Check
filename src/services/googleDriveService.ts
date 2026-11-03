@@ -99,12 +99,16 @@ export async function listDriveFolderContents(
     } else if (mimeFilter === 'txt') {
       qParts.push(`(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'text/plain')`);
     } else {
-      // General filter: show all folders PLUS worksheet documents
+     // General filter: show all folders PLUS worksheet documents (including sheets/excel)
       qParts.push(
         `(mimeType = 'application/vnd.google-apps.folder' or ` +
         `mimeType = 'application/pdf' or ` +
         `mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or ` +
         `mimeType = 'application/vnd.google-apps.document' or ` +
+        `mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
+        `mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or ` +
+        `mimeType = 'application/vnd.ms-excel' or ` +
+        `mimeType = 'text/csv' or ` +
         `mimeType = 'text/plain' or ` +
         `mimeType contains 'image/')`
       );
@@ -161,6 +165,10 @@ export async function fetchAllFilesInsideFolder(token: string, folderId: string)
       `mimeType = 'application/pdf' or ` +
       `mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or ` +
       `mimeType = 'application/vnd.google-apps.document' or ` +
+      `mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
+      `mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or ` +
+      `mimeType = 'application/vnd.ms-excel' or ` +
+      `mimeType = 'text/csv' or ` +
       `mimeType = 'text/plain' or ` +
       `mimeType contains 'image/')`;
 
