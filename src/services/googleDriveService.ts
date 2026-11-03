@@ -196,6 +196,14 @@ export async function fetchAllFilesInsideFolder(token: string, folderId: string)
 
 export async function downloadDriveFile(token: string, file: DriveFileItem): Promise<File> {
   const isGoogleDoc = file.mimeType === 'application/vnd.google-apps.document';
+  if (file.mimeType === 'application/vnd.google-apps.spreadsheet') {
+    const exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/csv`;
+    const res = await fetch(exportUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const blob = await res.blob();
+    return new File([blob], `${file.name}.csv`, { type: 'text/csv' });
+  }
 
   let downloadUrl = '';
   let finalMimeType = file.mimeType;
