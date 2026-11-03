@@ -16,6 +16,7 @@ import { StudentSubmission, AssignmentSettings } from './types';
 import { SAMPLE_WORKSHEETS } from './data/sampleWorksheets';
 import { exportToCSV } from './utils/exportUtils';
 import { analyzeWorksheetDirectly } from './services/geminiService';
+import * as XLSX from 'xlsx';
 
 export default function App() {
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
@@ -97,6 +98,22 @@ export default function App() {
       reader.readAsText(file);
     });
   };
+  // Четене на екселски (.xlsx, .xls) и .csv файлове като структуриран текст
+const readSpreadsheetAsText = async (file: File): Promise<string> => {
+  const arrayBuffer = await file.arrayBuffer();
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+  let fullText = '';
+
+  workbook.SheetNames.forEach((sheetName) => {
+    const worksheet = workbook.Sheets[sheetName];
+    const csvData = XLSX.utils.sheet_to_csv(worksheet);
+    if (csvData.trim()) {
+      fullText += `--- Работен лист: ${sheetName} ---\n${csvData}\n\n`;
+    }
+  });
+
+  return fullText;
+};
 
   // Process a single submission item
   const analyzeSingleItem = async (
@@ -206,20 +223,27 @@ export default function App() {
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const id = `${Date.now()}-${i}-${Math.random().toString(36).substring(2, 7)}`;
-      const isTxt = file.name.toLowerCase().endsWith('.txt') || file.type === 'text/plain';
+     const isTxt = file.name.toLowerCase().endsWith('.txt') || file.type === 'text/plain';
+const isSpreadsheet =
+  /\.(xlsx?|csv)$/i.test(file.name) ||
+  file.type.includes('spreadsheet') ||
+  file.type.includes('excel') ||
+  file.type === 'text/csv';
 
-      let base64 = '';
-      let text = '';
+let base64 = '';
+let text = '';
 
-      try {
-        if (isTxt) {
-          text = await readFileAsText(file);
-        } else {
-          base64 = await readFileAsBase64(file);
-        }
-      } catch (readErr) {
-        console.error('Read error:', readErr);
-      }
+try {
+  if (isSpreadsheet) {
+    text = await readSpreadsheetAsText(file);
+  } else if (isTxt) {
+    text = await readFileAsText(file);
+  } else {
+    base64 = await readFileAsBase64(file);
+  }
+} catch (readErr) {
+  console.error('Read error:', readErr);
+}
 
       const cleanName = file.name
         .replace(/\.[^/.]+$/, '')
