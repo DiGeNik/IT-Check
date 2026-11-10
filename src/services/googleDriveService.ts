@@ -1,167 +1,245 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { initializeApp, getApps } from 'firebase/app';
+import {
+  getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  onAuthStateChanged,
+  User,
+  signOut,
+} from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-const universalAnalysisSchema = {
-  type: Type.OBJECT,
-  properties: {
-    studentName: {
-      type: Type.STRING,
-      description: 'Име и фамилия на ученика, извлечени от предадената работа или името на файла.',
-    },
-    totalScore: {
-      type: Type.INTEGER,
-      description: 'Общ сбор от получените точки съгласно зададената рубрика.',
-    },
-    maxScore: {
-      type: Type.INTEGER,
-      description: 'Максималният възможен брой точки за цялото задание според рубриката.',
-    },
-    tasks: {
-      type: Type.ARRAY,
-      description: 'Разбивка на оценката по всяка отделна задача или критерий от рубриката.',
-      items: {
-        type: Type.OBJECT,
-        properties: {
-          taskName: { type: Type.STRING, description: 'Име на задачата или критерия' },
-          score: { type: Type.INTEGER, description: 'Получени точки от ученика' },
-          maxScore: { type: Type.INTEGER, description: 'Максимален брой точки за този критерий' },
-          feedback: { type: Type.STRING, description: 'Кратка бележка и обосновка за оценката' },
-        },
-        required: ['taskName', 'score', 'maxScore', 'feedback'],
-      },
-    },
-    strengths: {
-      type: Type.STRING,
-      description: 'Силни страни и верни отговори на ученика.',
-    },
-    weaknesses: {
-      type: Type.STRING,
-      description: 'Пропуски, неточности или липсващи отговори.',
-    },
-    classroomComment: {
-      type: Type.STRING,
-      description: 'Индивидуален насърчителен коментар за Google Classroom от 2-3 изречения на български език.',
-    },
-    statusSummary: {
-      type: Type.STRING,
-      description: 'Кратка обобщена оценка на предадената работа.',
-    },
-  },
-  required: ['studentName', 'totalScore', 'maxScore', 'tasks', 'classroomComment', 'statusSummary'],
-};
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+const auth = getAuth(app);
 
-export interface AnalyzePayload {
-  fileName: string;
-  fileType?: string;
-  fileBase64?: string;
-  textContent?: string;
-  assignmentTopic?: string;
-  rubricCriteria?: string;
-  referenceSolution?: string;
-  maxScore?: number;
+const SCOPES = ['https://www.googleapis.com/auth/drive.readonly'];
+
+const provider = new GoogleAuthProvider();
+SCOPES.forEach((scope) => provider.addScope(scope));
+
+let isSigningIn = false;
+let cachedAccessToken: string | null = null;
+
+export interface DriveFileItem {
+  id: string;
+  name: string;
+  mimeType: string;
+  isFolder: boolean;
+  size?: string;
+  modifiedTime?: string;
+  thumbnailLink?: string;
 }
 
-export async function analyzeWorksheetDirectly(payload: AnalyzePayload) {
-  // Проверява за въведен ключ в localStorage или от обкръжението
-  let apiKey = localStorage.getItem('gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
-  
-  if (!apiKey) {
-    apiKey = prompt('Моля, въведете Вашия безплатен Gemini API ключ, за да стартирате проверката:') || '';
-    if (apiKey.trim()) {
-      localStorage.setItem('gemini_api_key', apiKey.trim());
-    } else {
-      throw new Error('Липсва Gemini API ключ. Проверката не може да продължи.');
+export const initAuth = (
+  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  return onAuthStateChanged(auth, async (user: User | null) => {
+    if (user && cachedAccessToken) {
+      if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+    } else if (!isSigningIn) {
+      cachedAccessToken = null;
+      if (onAuthFailure) onAuthFailure();
     }
+  });
+};
+
+export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  try {
+    isSigningIn = true;
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (!credential?.accessToken) {
+      throw new Error('Неуспешно получаване на токен за достъп от Google.');
+    }
+
+    cachedAccessToken = credential.accessToken;
+    return { user: result.user, accessToken: cachedAccessToken };
+  } catch (error: any) {
+    console.error('Google Sign-in error:', error);
+    throw error;
+  } finally {
+    isSigningIn = false;
+  }
+};
+
+export const getAccessToken = (): string | null => {
+  return cachedAccessToken;
+};
+
+export const logout = async () => {
+  await signOut(auth);
+  cachedAccessToken = null;
+};
+
+export async function listDriveFolderContents(
+  token: string,
+  folderId = 'root',
+  query = '',
+  mimeFilter = 'all'
+): Promise<DriveFileItem[]> {
+  try {
+    const qParts = ['trashed = false'];
+
+    if (query.trim()) {
+      const sanitized = query.replace(/['\\]/g, '');
+      qParts.push(`name contains '${sanitized}'`);
+    } else {
+      qParts.push(`'${folderId}' in parents`);
+    }
+
+    if (mimeFilter === 'pdf') {
+      qParts.push(`(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/pdf')`);
+    } else if (mimeFilter === 'docx') {
+      qParts.push(`(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')`);
+    } else if (mimeFilter === 'docs') {
+      qParts.push(`(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'application/vnd.google-apps.document')`);
+    } else if (mimeFilter === 'images') {
+      qParts.push(`(mimeType = 'application/vnd.google-apps.folder' or mimeType contains 'image/')`);
+    } else if (mimeFilter === 'txt') {
+      qParts.push(`(mimeType = 'application/vnd.google-apps.folder' or mimeType = 'text/plain')`);
+    } else {
+     // General filter: show all folders PLUS worksheet documents (including sheets/excel)
+      qParts.push(
+        `(mimeType = 'application/vnd.google-apps.folder' or ` +
+        `mimeType = 'application/pdf' or ` +
+        `mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or ` +
+        `mimeType = 'application/vnd.google-apps.document' or ` +
+        `mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
+        `mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or ` +
+        `mimeType = 'application/vnd.ms-excel' or ` +
+        `mimeType = 'text/csv' or ` +
+        `mimeType = 'text/plain' or ` +
+        `mimeType contains 'image/')`
+      );
+    }
+
+    const q = qParts.join(' and ');
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q', q);
+    url.searchParams.set('pageSize', '100');
+    url.searchParams.set('fields', 'files(id, name, mimeType, size, modifiedTime, thumbnailLink)');
+    url.searchParams.set('orderBy', 'folder,name_natural asc');
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Грешка от Google Drive: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const rawFiles: any[] = data.files || [];
+
+    const items: DriveFileItem[] = rawFiles.map((f) => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      isFolder: f.mimeType === 'application/vnd.google-apps.folder',
+      size: f.size,
+      modifiedTime: f.modifiedTime,
+      thumbnailLink: f.thumbnailLink,
+    }));
+
+    // Sort: Folders first, then files
+    items.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1;
+      if (!a.isFolder && b.isFolder) return 1;
+      return a.name.localeCompare(b.name, 'bg');
+    });
+
+    return items;
+  } catch (err: any) {
+    console.error('Error listing Drive folder contents:', err);
+    throw err;
+  }
+}
+
+export async function fetchAllFilesInsideFolder(token: string, folderId: string): Promise<DriveFileItem[]> {
+  try {
+    const q = `'${folderId}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder' and (` +
+      `mimeType = 'application/pdf' or ` +
+      `mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or ` +
+      `mimeType = 'application/vnd.google-apps.document' or ` +
+      `mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
+      `mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or ` +
+      `mimeType = 'application/vnd.ms-excel' or ` +
+      `mimeType = 'text/csv' or ` +
+      `mimeType = 'text/plain' or ` +
+      `mimeType contains 'image/')`;
+
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q', q);
+    url.searchParams.set('pageSize', '100');
+    url.searchParams.set('fields', 'files(id, name, mimeType, size, modifiedTime)');
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!res.ok) {
+      throw new Error(`Грешка при четене на файлове от папката: HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const rawFiles: any[] = data.files || [];
+
+    return rawFiles.map((f) => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      isFolder: false,
+      size: f.size,
+      modifiedTime: f.modifiedTime,
+    }));
+  } catch (err) {
+    console.error('Error fetching files in folder:', err);
+    throw err;
+  }
+}
+
+export async function downloadDriveFile(token: string, file: DriveFileItem): Promise<File> {
+  const isGoogleDoc = file.mimeType === 'application/vnd.google-apps.document';
+  if (file.mimeType === 'application/vnd.google-apps.spreadsheet') {
+    const exportUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/csv`;
+    const res = await fetch(exportUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const blob = await res.blob();
+    return new File([blob], `${file.name}.csv`, { type: 'text/csv' });
   }
 
-  const ai = new GoogleGenAI({ apiKey });
+  let downloadUrl = '';
+  let finalMimeType = file.mimeType;
+  let finalFileName = file.name;
 
-  const {
-    fileName,
-    fileType,
-    fileBase64,
-    textContent,
-    assignmentTopic,
-    rubricCriteria,
-    referenceSolution,
-    maxScore,
-  } = payload;
-
-  const currentTopic = assignmentTopic || 'Информационни технологии';
-  const currentRubric = rubricCriteria || 'Стандартни критерии за оценка';
-
-  const promptInstructions = `
-Ти си експертен учител, проверяващ предадена ученическа самостоятелна работа / лабораторен протокол по следната тема:
-ТЕМА НА ЗАДАНИЕТО: "${currentTopic}".
-
-ЗАДАДЕНИ КРИТЕРИИ ЗА ОЦЕНЯВАНЕ (РУБРИКА):
-${currentRubric}
-
-${referenceSolution && referenceSolution.trim() ? `ЕТАЛОННО РЕШЕНИЕ / ВЕРНИ ОТГОВОРИ (за сравнение):\n${referenceSolution}\n` : ''}
-
-ОСНОВНИ ИЗИСКВАНИЯ:
-1. Оцени предадената работа стриктно според зададената по-горе рубрика.
-2. Върни точна разбивка по задачите/критериите (в списъка "tasks"). За всяка задача отчети получените точки, нейния максимум и кратка учителска обосновка.
-3. Сумирай точно общия сбор "totalScore" (той трябва да е равен на сумата от точките на задачите).
-4. Задай "maxScore" (стойност: ${maxScore || 12} или сумата от максимумите по критериите).
-5. Извлечи името и фамилията на ученика от предадения документ или интелигентно от името на файла ("${fileName}").
-6. Напиши персонален, насърчителен и мотивиращ коментар за Google Classroom (2-3 изречения на български език), съдържащ името на ученика, точна разбивка на точките, похвала и препоръка.
-
-Име на файла: "${fileName}".
-`;
-
-  let contentsParts: any[] = [];
-  const lowerName = fileName.toLowerCase();
-  const isPdf = lowerName.endsWith('.pdf') || fileType === 'application/pdf';
-  const isImage = fileType?.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp)$/i.test(lowerName);
-
-  if (isPdf && fileBase64) {
-    contentsParts = [
-      { inlineData: { mimeType: 'application/pdf', data: fileBase64 } },
-      { text: promptInstructions },
-    ];
-  } else if (isImage && fileBase64) {
-    const mime = fileType || (lowerName.endsWith('.png') ? 'image/png' : 'image/jpeg');
-    contentsParts = [
-      { inlineData: { mimeType: mime, data: fileBase64 } },
-      { text: promptInstructions },
-    ];
-  } else if (textContent) {
-    contentsParts = [{ text: promptInstructions + '\n\nСЪДЪРЖАНИЕ НА ПРЕДАДЕНИЯ ДОКУМЕНТ:\n' + textContent }];
+  if (isGoogleDoc) {
+    // Export Google Docs as plain text
+    downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`;
+    finalMimeType = 'text/plain';
+    if (!finalFileName.endsWith('.txt')) {
+      finalFileName += '.txt';
+    }
   } else {
-    contentsParts = [{ text: promptInstructions }];
+    // Regular binary or media file
+    downloadUrl = `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`;
   }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
-    contents: { parts: contentsParts },
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: universalAnalysisSchema,
-      temperature: 0.2,
+  const res = await fetch(downloadUrl, {
+    headers: {
+      Authorization: `Bearer ${token}`,
     },
   });
 
-  if (!response || !response.text) {
-    throw new Error('Моделът не успя да върне отговор. Моля, опитайте отново.');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Грешка при сваляне на "${file.name}": HTTP ${res.status}`);
   }
 
-  const parsedData = JSON.parse(response.text.trim());
-  const tasks = Array.isArray(parsedData.tasks) ? parsedData.tasks : [];
-  let calculatedTotal = 0;
-  let calculatedMax = 0;
-
-  tasks.forEach((t: any) => {
-    t.score = Math.max(0, Number(t.score) || 0);
-    t.maxScore = Math.max(1, Number(t.maxScore) || 1);
-    if (t.score > t.maxScore) t.score = t.maxScore;
-    calculatedTotal += t.score;
-    calculatedMax += t.maxScore;
-  });
-
-  parsedData.totalScore = calculatedTotal;
-  if (!parsedData.maxScore || parsedData.maxScore <= 0) {
-    parsedData.maxScore = calculatedMax || Number(maxScore) || 12;
-  }
-
-  return parsedData;
+  const blob = await res.blob();
+  return new File([blob], finalFileName, { type: finalMimeType });
 }
