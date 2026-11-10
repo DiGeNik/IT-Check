@@ -18,6 +18,15 @@ import { exportToCSV } from './utils/exportUtils';
 import { analyzeWorksheetDirectly } from './services/geminiService';
 import * as XLSX from 'xlsx';
 
+const handleResetApiKey = () => {
+  const currentKey = localStorage.getItem('gemini_api_key') || '';
+  const newKey = prompt('Въведете новия Gemini API ключ:', currentKey);
+  if (newKey !== null && newKey.trim()) {
+    localStorage.setItem('gemini_api_key', newKey.trim());
+    alert('API ключът е обновен успешно!');
+    window.location.reload();
+  }
+};
 export default function App() {
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => {
     try {
@@ -450,7 +459,22 @@ try {
             >
               Google Drive импорт
             </button>
+            <span><button
+              onClick={() => setIsDriveModalOpen(true)}
+              className="text-blue-600 hover:text-blue-800 transition-colors font-medium flex items-center gap-1"
+            >
+              Google Drive импорт
+            </button>
             <span>·</span>
+            <button
+              onClick={handleResetApiKey}
+              className="text-amber-600 hover:text-amber-700 transition-colors font-medium flex items-center gap-1 bg-amber-50 px-2.5 py-1 rounded border border-amber-200"
+              title="Смяна на Gemini API ключ"
+            >
+              🔑 Смяна на API ключ
+            </button>
+            <span>·</span>
+            <span>Поддържа .pdf, .docx, .txt, .png, .jpg</span>·</span>
             <span>Поддържа .pdf, .docx, .txt, .png, .jpg</span>
           </div>
         </div>
